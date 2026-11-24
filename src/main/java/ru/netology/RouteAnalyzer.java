@@ -25,21 +25,22 @@ public class RouteAnalyzer {
     public static void main(String[] args) throws InterruptedException {
         int routesCount = 1000;
 
+        Thread printer = getThread();
+
         ExecutorService executor = Executors.newFixedThreadPool(routesCount);
 
         for (int i = 0; i < routesCount; i++) {
             executor.execute(() -> {
                 String route = generateRoute("RLRFR", 100);
-
                 int rightTurns = 0;
                 for (char ch : route.toCharArray()) {
-                    if (ch == 'R') {
-                        rightTurns++;
-                    }
+                    if (ch == 'R') rightTurns++;
                 }
 
                 synchronized (sizeToFreq) {
                     sizeToFreq.merge(rightTurns, 1, Integer::sum);
+
+                    sizeToFreq.notifyAll();
                 }
             });
         }
@@ -47,24 +48,48 @@ public class RouteAnalyzer {
         executor.shutdown();
         executor.awaitTermination(1, TimeUnit.MINUTES);
 
+        printer.interrupt();
+        printer.join();
+
         printStatistics();
     }
 
+    private static Thread getThread() {
+        Thread printer = new Thread(() -> {
+            try {
+                while (!Thread.interrupted()) {
+                    synchronized (sizeToFreq) {
+                        // Ждём сигнала от считающего потока
+                        sizeToFreq.wait();
+
+                        // Ищем лидера по значениям в мапе
+                        Map.Entry<Integer, Integer> leader = sizeToFreq.entrySet().stream()
+                                .max(Map.Entry.comparingByValue())
+                                .orElseThrow();
+
+                        System.out.println("Текущий лидер: " + leader.getKey()
+                                + " (встретилось " + leader.getValue() + " раз)");
+                    }
+                }
+            } catch (InterruptedException e) {
+                System.out.println("Поток вывода лидера прерван");
+            }
+        });
+        printer.start();
+        return printer;
+    }
+
     private static void printStatistics() {
-        if (sizeToFreq.isEmpty()) {
-            System.out.println("Нет данных для анализа");
-            return;
-        }
+        if (sizeToFreq.isEmpty()) return;
 
         Map.Entry<Integer, Integer> mostFrequent = sizeToFreq.entrySet().stream()
                 .max(Map.Entry.comparingByValue())
                 .orElseThrow();
 
-        System.out.println(
-                "Самое частое количество повторений " + mostFrequent.getKey()
-                        + " (встретилось " + mostFrequent.getValue() + " раз)"
-        );
-
+        System.out.println();
+        System.out.println("Итоговая статистика:");
+        System.out.println("Самое частое количество повторений " + mostFrequent.getKey()
+                + " (встретилось " + mostFrequent.getValue() + " раз)");
         System.out.println("Другие размеры:");
 
         List<Map.Entry<Integer, Integer>> others = new ArrayList<>(sizeToFreq.entrySet());
